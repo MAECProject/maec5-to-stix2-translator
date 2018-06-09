@@ -6,6 +6,11 @@ setup(
     author="Mitre",
     description="Translate MAEC 5.0 packages to STIX 2.1",
     python_version=">= 2.7",
+    extras_require={
+        # TODO: update this to require the earliest released version of stix2
+        # to support the STIX 2.1 specification.
+        "stix2": ["stix2"]
+    },
 
     entry_points={
         "console_scripts": [

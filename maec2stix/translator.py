@@ -5,6 +5,11 @@ import copy
 import datetime
 import itertools
 
+try:
+    import stix2
+except ImportError:
+    stix2 = None
+
 
 class TranslationError(Exception):
     """
@@ -849,8 +854,8 @@ def translate_package(maec_package):
     share any mutable data), even if some things could be directly reused.
     (Barring bugs, of course.)
 
-    :param maec_package: The MAEC package
-    :return: The STIX bundle
+    :param maec_package: The MAEC package (a dict)
+    :return: The STIX bundle (a dict)
     """
 
     # Use this whenever we need to set created/modified timestamps on things,
@@ -902,3 +907,25 @@ def translate_package(maec_package):
     stix_note["object_refs"] = stix_obj_refs
 
     return stix_bundle
+
+
+def translate_package_to_object(maec_package):
+    """
+    Translate a MAEC package to a STIX bundle.  This will return a stix2
+    Bundle object, instead of a plain dict.
+
+    Note that this function may produce errors where translate_package() does
+    not.  The stix2 parsing process performs a lot more validation of content
+    than the translator does.  For example, invalid MAEC content might be
+    copied to the bundle by the translator without error, whereas the stix2
+    parsing process detects the problem and triggers an error.
+
+    :param maec_package: The MAEC package (a dict)
+    :return: The STIX bundle (as a stix2 object)
+    """
+    if not stix2:
+        raise TranslationError("Can't create a stix2 object: "
+                               "please install stix2 first!")
+
+    stix_bundle_dict = translate_package(maec_package)
+    return stix2.parse(stix_bundle_dict)

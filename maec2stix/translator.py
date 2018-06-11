@@ -137,7 +137,7 @@ def _name_from_malware_instance(maec_malware_instance, maec_package):
 
     :param maec_malware_instance: A MAEC malware instance
     :param maec_package: The containing MAEC package
-    :return:
+    :return: A name
     """
     if "name" in maec_malware_instance:
         return maec_malware_instance["name"]["value"]
@@ -781,8 +781,6 @@ def _translate_malware_family(maec_malware_family, timestamp):
             stix_malware["capabilities"] = list(stix_capabilities)
 
     if "common_strings" in maec_malware_family:
-        # MAEC malware families can't have analyses, so translating this
-        # to a STIX analysis may not really make sense...
         stix_malware["static_analysis_results"] = {
             "results": {
                 "strings": maec_malware_family["common_strings"][:]

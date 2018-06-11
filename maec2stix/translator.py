@@ -687,10 +687,6 @@ def _translate_malware_instance(maec_malware_instance, maec_package, timestamp):
         stix_malware["labels"] = _translate_labels(
             maec_malware_instance["labels"]
         )
-    else:
-        # Made-up label, to satisfy STIX requirement that there is always at
-        # least one label.
-        stix_malware["labels"] = "unlabeled-malware"
 
     if "aliases" in maec_malware_instance:
         stix_malware["external_references"] = _translate_aliases(
@@ -729,6 +725,13 @@ def _translate_malware_instance(maec_malware_instance, maec_package, timestamp):
 
         if stix_capabilities:
             stix_malware["capabilities"] = list(stix_capabilities)
+
+    if "labels" not in stix_malware:
+        # Made-up label, to satisfy STIX requirement that there is always at
+        # least one label.  Do this at the end, to try to ensure that there
+        # couldn't subsequently be more labels added.  I think if
+        # "unlabeled-malware" is a label, it should be the only label.
+        stix_malware["labels"] = "unlabeled-malware"
 
     return stix_malware
 

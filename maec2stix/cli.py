@@ -54,11 +54,6 @@ def main():
 
     try:
 
-        if args.o:
-            out = io.open(args.o, "w", encoding=args.e)
-        else:
-            out = sys.stdout
-
         # "in" is a python keyword
         in_arg = getattr(args, "in")
         if in_arg == "-":
@@ -67,6 +62,17 @@ def main():
             in_ = io.open(in_arg, "r", encoding=args.e)
 
         maec_package = json.load(in_)
+
+    finally:
+        if in_ not in (None, sys.stdin):
+            in_.close()
+
+    try:
+
+        if args.o:
+            out = io.open(args.o, "w", encoding=args.e)
+        else:
+            out = sys.stdout
 
         if stix2 and args.p:
             stix_bundle_object = \
@@ -90,8 +96,6 @@ def main():
     finally:
         if out not in (None, sys.stdout):
             out.close()
-        if in_ not in (None, sys.stdin):
-            in_.close()
 
 
 if __name__ == "__main__":

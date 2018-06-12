@@ -427,33 +427,35 @@ def _translate_static_analyses(maec_static_analyses, maec_static_features,
     :param maec_static_analyses: List of MAEC static analyses
     :param maec_static_features: MAEC static_features dict
     :param maec_package: The containing MAEC package
-    :return: A 2-tuple: A STIX static analysis and a list of additional
-        labels to be added to a STIX malware object.
+    :return: A 2-tuple: A STIX static analysis and a set of additional
+        labels to be added to a STIX malware object.  If a STIX analysis could
+        not be translated from the MAEC, None is returned for the first
+        component.  If no labels were found, an empty set is returned for the
+        second component.
     """
 
-    # Guidance is to copy over some analysis metadata if there is exactly one
-    # analysis.  Otherwise, either we have no metadata, or it's ambiguous
-    # which analysis (if any) produced the static features.  So we don't copy
-    # anything.  In all cases, we never produce more than one STIX analysis.
-    if len(maec_static_analyses) == 1:
-        stix_static_analysis = _start_stix_analysis(maec_static_analyses[0],
-                                                    maec_package)
-    else:
-        stix_static_analysis = {}
-
     stix_static_results = None
-    additional_labels = []
+    additional_labels = set()
     if maec_static_features:
         stix_static_results, additional_labels = _translate_static_features(
             maec_static_features, maec_package
         )
 
-    # "results" is actually required in STIX.  But nothing in MAEC's
-    # static-features type is required.  But I don't think it can be empty
-    # either.  Requirements are more complex.  But I can't add an empty
-    # "results" property either, so I'll check.  Should an exception be raised
-    # instead of omitting empty results?
+    # "results" is required in a STIX analysis.  If we couldn't translate the
+    # static features to results, we can't make an analysis.
+    stix_static_analysis = None
     if stix_static_results:
+        # Guidance is to copy over some analysis metadata if there is exactly
+        # one analysis.  Otherwise, either we have no metadata, or it's
+        # ambiguous which analysis (if any) produced the static features.  So
+        # we don't copy anything.  In all cases, we never produce more than one
+        # STIX analysis.
+        if len(maec_static_analyses) == 1:
+            stix_static_analysis = _start_stix_analysis(maec_static_analyses[0],
+                                                        maec_package)
+        else:
+            stix_static_analysis = {}
+
         stix_static_analysis["results"] = stix_static_results
 
     return stix_static_analysis, additional_labels
@@ -467,20 +469,9 @@ def _translate_dynamic_analyses(maec_dynamic_analyses, maec_dynamic_features,
     :param maec_dynamic_analyses: List of MAEC dynamic analyses
     :param maec_dynamic_features: MAEC dynamic_features dict
     :param maec_package: The containing MAEC package
-    :return: A STIX dynamic analysis
+    :return: A STIX dynamic analysis.  If a STIX analysis could not translated
+        from the MAEC, None is returned.
     """
-
-    # similar issues for dynamic results as for static results
-    if len(maec_dynamic_analyses) == 1:
-        maec_dynamic_analysis = maec_dynamic_analyses[0]
-        stix_dynamic_analysis = _start_stix_analysis(maec_dynamic_analysis,
-                                                     maec_package)
-
-        if "analysis_environment" in maec_dynamic_analysis:
-            stix_dynamic_analysis["analysis_environment"] = \
-                copy.deepcopy(maec_dynamic_analysis["analysis_environment"])
-    else:
-        stix_dynamic_analysis = {}
 
     stix_dynamic_results = None
     if maec_dynamic_features:
@@ -488,7 +479,20 @@ def _translate_dynamic_analyses(maec_dynamic_analyses, maec_dynamic_features,
             maec_dynamic_features, maec_package
         )
 
+    # similar issues for dynamic results as for static results
+    stix_dynamic_analysis = None
     if stix_dynamic_results:
+        if len(maec_dynamic_analyses) == 1:
+            maec_dynamic_analysis = maec_dynamic_analyses[0]
+            stix_dynamic_analysis = _start_stix_analysis(maec_dynamic_analysis,
+                                                         maec_package)
+
+            if "analysis_environment" in maec_dynamic_analysis:
+                stix_dynamic_analysis["analysis_environment"] = \
+                    copy.deepcopy(maec_dynamic_analysis["analysis_environment"])
+        else:
+            stix_dynamic_analysis = {}
+
         stix_dynamic_analysis["results"] = stix_dynamic_results
 
     return stix_dynamic_analysis
@@ -501,10 +505,9 @@ def _translate_analyses(maec_malware_instance, maec_package):
 
     :param maec_malware_instance: A MAEC malware instance
     :param maec_package: The containing MAEC package
-    :return: A 3-tuple: list of STIX static analyses, list of STIX dynamic
-        analyses, and a list of additional labels to be appended to a STIX
-        malware object.  (Some MAEC malware features just result in some extra
-        labels.)
+    :return: A 3-tuple: a STIX static analysis, STIX dynamic analysis, and a
+        set of additional labels to be appended to a STIX malware object.
+        (Some MAEC malware features just result in some extra labels.)
     """
     maec_static_analyses = []
     maec_dynamic_analyses = []
@@ -731,7 +734,7 @@ def _translate_malware_instance(maec_malware_instance, maec_package, timestamp):
         # least one label.  Do this at the end, to try to ensure that there
         # couldn't subsequently be more labels added.  I think if
         # "unlabeled-malware" is a label, it should be the only label.
-        stix_malware["labels"] = "unlabeled-malware"
+        stix_malware["labels"] = ["unlabeled-malware"]
 
     return stix_malware
 

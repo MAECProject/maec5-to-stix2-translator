@@ -68,7 +68,7 @@ def main():
 
         maec_package = json.load(in_)
 
-        if args.p:
+        if stix2 and args.p:
             stix_bundle_object = \
                 maec2stix.translator.translate_package_to_object(maec_package)
             out.write(stix_bundle_object.serialize(pretty=True))

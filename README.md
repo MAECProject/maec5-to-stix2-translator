@@ -16,6 +16,11 @@ commandline tool.  Some additional functionality is available if the
 python-stix2 library is installed, and it supports STIX 2.1.  As of this
 writing, no released version of python-stix2 supports STIX 2.1.
 
+Note that this library isn't designed to validate MAEC content.  It mostly
+assumes the content is correct.  If it isn't, results are unpredictable.
+Exceptions might be thrown, or some components of the MAEC package could be
+silently dropped in the translation.  The results might not be what you expect.
+
 #### Commandline Usage
 
     usage: maec2stix [-h] [-o OUT] [-e ENCODING] [-p] in

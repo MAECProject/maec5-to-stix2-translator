@@ -97,6 +97,23 @@ The following table provides details on the object/property mappings between MAE
 |---|`analysis-metadata`|tool_refs|`analysis-type`|analysis_tools|
 |---|`analysis-metadata`|analysis_environment|`analysis-type`|analysis_environment|
 |---|`static-features`|certificates|`analysis-type`|results[certificates]|
+|---|`static-features`|strings|`analysis-type`|results[strings]|
+|---|`static-features`|file_headers|`analysis-type`|results[file-headers]|
+|---|`static-features`|obfuscation_methods|`analysis-type`|results[packers]|
+|---|`binary-obfuscation`|packer_name|`software`|name|
+|---|`binary-obfuscation`|packer_version|`software`|version|
+|---|`dynamic-features`|action_refs|`analysis-type`|results (see vocabulary mappings)|
+|---|`name`|value|`external-reference`|external_id|
+|---|`external-reference`|source_name|`external-reference`|source_name|
+|---|`external-reference`|description|`external-reference`|description|
+|---|`external-reference`|url|`external-reference`|url|
+|---|`external-reference`|external_id|`external-reference`|external_id|
+|---|`x-maec-avclass`|av_vendor|`av-results-type`|product|
+|---|`x-maec-avclass`|av_engine_version|`av-results-type`|av_engine_version|
+|---|`x-maec-avclass`|av_definition_version|`av-results-type`|av_definition_version|
+|---|`x-maec-avclass`|submission_date|`av-results-type`|submitted|
+|---|`x-maec-avclass`|scan_date|`av-results-type`|scanned|
+|---|`x-maec-avclass`|classification_name|`av-results-type`|result|
 
 ##### Vocabulary Mappings
 

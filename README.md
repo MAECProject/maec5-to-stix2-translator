@@ -158,9 +158,38 @@ The following table provides details on the object/property mappings between MAE
 |connect-to-url|contacted-domains|
 |connect-to-ip-address|contacted-ips|
 
+**MAEC malware-label-ov --> STIX malware-type-ov**
 
-
-
-
+|MAEC Vocabulary Value|STIX Vocabulary Value|
+|---------------------|---------------------|
+|adware|adware|
+|backdoor|backdoor|
+|bot|bot|
+|ddos|ddos|
+|dropper|dropper|
+|exploit-kit|exploit-kit|
+|keylogger|keylogger|
+|ransomware|ransomware|
+|remote-access-trojan|remote-access-trojan|
+|resource-exploiter|resource-exploitation|
+|rogue-security-software|rogue-security-software|
+|rootkit|rootkit|
+|screen-capture|screen-capture|
+|spyware|spyware|
+|trojan|trojan|
+|virus|virus|
+|worm|worm|
 
 ##### Relationship Mappings
+
+|MAEC Relationship|STIX Relationship|
+|-----------------|-----------------|
+|malware-instance `variant-of` malware-instance|malware `variant-of` malware|
+|malware-instance `variant-of` malware-family|malware `variant-of` malware|
+|malware-instance-1 `dropped-by` malware-instance-2|malware-2 `drops` malware-1|
+|malware-instance-1 `dropped-by` malware-family-2|malware-2 `drops` malware-1|
+|malware-instance `derived-from` malware-instance|malware `derived-from` malware|
+|malware-instance `derived-from` malware-family|malware `derived-from` malware|
+|malware-instance `derived-from` malware-family|malware `derived-from` malware|
+|malware-instance `related-to` malware-instance|malware `related-to` malware|
+|malware-instance `related-to` malware-family|malware `related-to` malware|

@@ -63,6 +63,7 @@ This tool performs the following translation from MAEC 5.0 into the STIX 2.1 Mal
 * MAEC 5.0 Package --> STIX 2.1 Bundle
   * MAEC Malware Instance Object --> STIX Malware SDO
   * MAEC Malware Family Object --> STIX Malware SDO
+  * MAEC Malware Action Object --> STIX Analysis Type
   * MAEC Analysis Metadata Type --> STIX Analysis Type
   * MAEC Static Features Type --> STIX Analysis Type
   * MAEC Dynamic Features Type --> STIX Analysis Type
@@ -71,6 +72,18 @@ This tool performs the following translation from MAEC 5.0 into the STIX 2.1 Mal
   * MAEC AV Classification Extension --> STIX AV Results Type
   * MAEC Binary Obfuscation Type --> STIX Software Object Type
   * MAEC Relationships --> STIX Relationships
+  
+Accordingly, the following major MAEC 5.0 features are **not** translated in this release:
+
+* **Top-level Objects**
+  * Behaviors
+  * Collections
+* **Types/Features**
+  * OS Features (Malware Instance)
+  * Triggered Signatures (Malware Instance)
+  * Network Traffic Refs (Dynamic Features)
+  * Process Tree (Dynamic Features)
+  * 
 
 ##### Object/Property Mappings
 
@@ -92,6 +105,7 @@ The following table provides details on the object/property mappings between MAE
 |Malware Family|`field-data`|first_seen|---|first_seen|
 |Malware Family|`field-data`|last_seen|---|last_seen|
 |Malware Family|---|common_capabilities|---|capabilities|
+|Malware Family|---|common_strings|`analysis-type`|results[strings]|
 |---|`analysis-metadata`|start_time|`analysis-type`|start_time|
 |---|`analysis-metadata`|end_time|`analysis-type`|end_time|
 |---|`analysis-metadata`|tool_refs|`analysis-type`|analysis_tools|

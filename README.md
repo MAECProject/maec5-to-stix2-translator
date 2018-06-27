@@ -76,7 +76,7 @@ This tool performs the following translation from MAEC 5.0 into the STIX 2.1 Mal
 
 The following table provides details on the object/property mappings between MAEC 5.0 and the STIX 2.1 Malware SDO, as performed by the translator:
 
-|MAEC 5.0 Object|MAEC 5.0 Type|MAEC 5.0 Property|STIX 2.1 Malware Type|STIX 2.1 Malware Property|
+|MAEC Object|MAEC Type|MAEC Property|STIX Malware Type|STIX Malware Property|
 |---------------|-------------|-----------------|---------------------|-------------------------|
 |Malware Instance|---|labels|---|labels|
 |Malware Instance|---|name|---|name|

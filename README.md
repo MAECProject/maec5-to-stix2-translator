@@ -81,17 +81,22 @@ The following table provides details on the object/property mappings between MAE
 |Malware Instance|---|labels|---|labels|
 |Malware Instance|---|name|---|name|
 |Malware Instance|---|description|---|description|
-|Malware Instance|field-data|first_seen|---|first_seen|
-|Malware Instance|field-data|last_seen|---|last_seen|
+|Malware Instance|`field-data`|first_seen|---|first_seen|
+|Malware Instance|`field-data`|last_seen|---|last_seen|
 |Malware Instance|---|architecture_execution_envs|---|architecture_execution_envs|
 |Malware Instance|---|instance_object_refs|---|samples|
 |Malware Instance|---|capabilities|---|capabilities|
 |Malware Family|---|labels|---|labels|
 |Malware Family|---|name|---|name|
 |Malware Family|---|description|---|description|
-|Malware Family|field-data|first_seen|---|first_seen|
-|Malware Family|field-data|last_seen|---|last_seen|
+|Malware Family|`field-data`|first_seen|---|first_seen|
+|Malware Family|`field-data`|last_seen|---|last_seen|
 |Malware Family|---|common_capabilities|---|capabilities|
+|---|`analysis-metadata`|start_time|`analysis-type`|start_time|
+|---|`analysis-metadata`|end_time|`analysis-type`|end_time|
+|---|`analysis-metadata`|tool_refs|`analysis-type`|analysis_tools|
+|---|`analysis-metadata`|analysis_environment|`analysis-type`|analysis_environment|
+|---|`static-features`|certificates|`analysis-type`|results[certificates]|
 
 ##### Vocabulary Mappings
 

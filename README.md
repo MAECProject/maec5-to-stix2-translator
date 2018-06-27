@@ -55,3 +55,30 @@ Bundle object.  If python-stix2 isn't installed, this function just raises an
 exception.  If the installed python-stix2 library doesn't support STIX 2.1,
 it's likely to fail to process the bundle data, and a variety of errors could
 result.
+
+### Translation
+
+This tool performs the following translation from MAEC 5.0 into the STIX 2.1 Malware SDO (based on the STIX 2.1 Malware SDO as of 5/31/2018):
+
+* MAEC 5.0 Package --> STIX 2.1 Bundle
+  * MAEC Malware Instance Object --> STIX Malware SDO
+  * MAEC Malware Family Object --> STIX Malware SDO
+  * MAEC Analysis Metadata Type --> STIX Analysis Type
+  * MAEC Static Features Type --> STIX Analysis Type
+  * MAEC Dynamic Features Type --> STIX Analysis Type
+  * MAEC Name Type --> STIX External Reference Type
+  * MAEC External Reference Type --> STIX External Reference Type
+  * MAEC AV Classification Extension --> STIX AV Results Type
+  * MAEC Binary Obfuscation Type --> STIX Software Object Type
+  * MAEC Relationships --> STIX Relationships
+
+##### Object/Property Mappings
+
+The following table provides details on the object/property mappings between MAEC 5.0 and the STIX 2.1 Malware SDO, as performed by the translator:
+
+|MAEC 5.0 Object|MAEC 5.0 Type|MAEC 5.0 Property|STIX 2.1 Malware Type|STIX 2.1 Malware Property|
+|---------------|-------------|-----------------|---------------------|-------------------------|
+||||||
+
+
+##### Vocabulary Mappings

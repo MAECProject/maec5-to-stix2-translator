@@ -78,7 +78,9 @@ The following table provides details on the object/property mappings between MAE
 
 |MAEC 5.0 Object|MAEC 5.0 Type|MAEC 5.0 Property|STIX 2.1 Malware Type|STIX 2.1 Malware Property|
 |---------------|-------------|-----------------|---------------------|-------------------------|
-||||||
+|Malware Instance|---|labels|---|labels|
 
 
 ##### Vocabulary Mappings
+
+##### Relationship Mappings

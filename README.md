@@ -73,7 +73,7 @@ This tool performs the following translation from MAEC 5.0 into the STIX 2.1 Mal
   * MAEC Binary Obfuscation Type --> STIX Software Object Type
   * MAEC Relationships --> STIX Relationships
   
-Accordingly, the following major MAEC 5.0 features are **not** translated in this release:
+Accordingly, the following major MAEC 5.0 objects and features are **not** translated in this release:
 
 * **Top-level Objects**
   * Behaviors
@@ -83,7 +83,8 @@ Accordingly, the following major MAEC 5.0 features are **not** translated in thi
   * Triggered Signatures (Malware Instance)
   * Network Traffic Refs (Dynamic Features)
   * Process Tree (Dynamic Features)
-  * 
+  * Development Environment (Static Features)
+  * Configuration Parameters (Static Features)
 
 ##### Object/Property Mappings
 
@@ -130,5 +131,35 @@ The following table provides details on the object/property mappings between MAE
 |---|`x-maec-avclass`|classification_name|`av-results-type`|result|
 
 ##### Vocabulary Mappings
+
+**MAEC malware-action-ov --> STIX dynamic-malware-analysis-data-ov**
+|MAEC Vocabulary Value|STIX Vocabulary Value|
+|---------------------|---------------------|
+|create-process|created-processes|
+|read-from-process-memory|read-processes|
+|write-to-process-memory|written-processes|
+|kill-process|terminated-processes|
+|create-service|loaded-services|
+|load-library|loaded-dlls|
+|create-mutex|created-mutexes|
+|create-file|created-files|
+|open-file|opened-files|
+|delete-file|deleted-files|
+|read-from-file|read-files|
+|write-to-file|written-files|
+|create-directory|created-directories|
+|create-registry-key|created-registry-keys|
+|delete-registry-key|deleted-registry-keys|
+|open-registry-key|opened-registry-keys|
+|create-registry-key-value|written-registry-key-values|
+|read-registry-key-value|read-registry-keys|
+|send-http-connect-request OR send-http-delete-request OR send-http-get-request OR send-http-head-request OR send-http-options-request OR send-http-patch-request OR send-http-post-request OR send-http-put-request OR send-http-trace-request|http-requests|
+|connect-to-url|contacted-domains|
+|connect-to-ip-address|contacted-ips|
+
+
+
+
+
 
 ##### Relationship Mappings

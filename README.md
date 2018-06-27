@@ -133,6 +133,7 @@ The following table provides details on the object/property mappings between MAE
 ##### Vocabulary Mappings
 
 **MAEC malware-action-ov --> STIX dynamic-malware-analysis-data-ov**
+
 |MAEC Vocabulary Value|STIX Vocabulary Value|
 |---------------------|---------------------|
 |create-process|created-processes|

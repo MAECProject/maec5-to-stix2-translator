@@ -132,7 +132,7 @@ The following table provides details on the object/property mappings between MAE
 
 ##### Vocabulary Mappings
 
-**MAEC malware-action-ov --> STIX dynamic-malware-analysis-data-ov**
+##### MAEC malware-action-ov --> STIX dynamic-malware-analysis-data-ov**
 
 |MAEC Vocabulary Value|STIX Vocabulary Value|
 |---------------------|---------------------|
@@ -158,7 +158,7 @@ The following table provides details on the object/property mappings between MAE
 |connect-to-url|contacted-domains|
 |connect-to-ip-address|contacted-ips|
 
-**MAEC malware-label-ov --> STIX malware-type-ov**
+##### MAEC malware-label-ov --> STIX malware-type-ov**
 
 |MAEC Vocabulary Value|STIX Vocabulary Value|
 |---------------------|---------------------|
@@ -180,7 +180,7 @@ The following table provides details on the object/property mappings between MAE
 |virus|virus|
 |worm|worm|
 
-##### Relationship Mappings
+#### Relationship Mappings
 
 |MAEC Relationship|STIX Relationship|
 |-----------------|-----------------|

@@ -83,11 +83,15 @@ The following table provides details on the object/property mappings between MAE
 |Malware Instance|---|description|---|description|
 |Malware Instance|field-data|first_seen|---|first_seen|
 |Malware Instance|field-data|last_seen|---|last_seen|
+|Malware Instance|---|architecture_execution_envs|---|architecture_execution_envs|
+|Malware Instance|---|instance_object_refs|---|samples|
+|Malware Instance|---|capabilities|---|capabilities|
 |Malware Family|---|labels|---|labels|
 |Malware Family|---|name|---|name|
 |Malware Family|---|description|---|description|
 |Malware Family|field-data|first_seen|---|first_seen|
 |Malware Family|field-data|last_seen|---|last_seen|
+|Malware Family|---|common_capabilities|---|capabilities|
 
 ##### Vocabulary Mappings
 

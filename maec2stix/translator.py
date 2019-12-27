@@ -4,6 +4,11 @@ import collections
 import copy
 import datetime
 import itertools
+import re
+import six
+import stix2elevator.stix_stepper
+import stix2elevator.ids
+import uuid
 
 try:
     import stix2
@@ -20,55 +25,6 @@ class TranslationError(Exception):
     a more MAEC-specific exception makes sense.
     """
     pass
-
-
-# Describes how a MAEC action name maps to STIX.
-_ActionMapping = collections.namedtuple("ActionMapping",
-                                        "stix_name observable_type")
-
-
-# Maps MAEC malware-action name to corresponding STIX dynamic malware analysis
-# name and corresponding cyber-observable type(s).  If a list of types is
-# given, any observables of any of the given types are copied to STIX.
-_MAEC_STIX_ACTION_MAP = {
-    "create-process": _ActionMapping("created-processes", "process"),
-    "read-from-process-memory": _ActionMapping("read-processes", "process"),
-    "write-to-process-memory": _ActionMapping("written-processes", "process"),
-    "kill-process": _ActionMapping("terminated-processes", "process"),
-    "create-service": _ActionMapping("loaded-services", "process"),
-    "load-library": _ActionMapping("loaded-dlls", "file"),
-    "create-mutex": _ActionMapping("created-mutexes", "mutex"),
-    "create-file": _ActionMapping("created-files", "file"),
-    "open-file": _ActionMapping("opened-files", "file"),
-    "delete-file": _ActionMapping("deleted-files", "file"),
-    "read-from-file": _ActionMapping("read-files", "file"),
-    "write-to-file": _ActionMapping("written-files", "file"),
-    "create-directory": _ActionMapping("created-directories", "directory"),
-    "open-directory": _ActionMapping("written-directories", "directory"),
-    "create-registry-key": _ActionMapping("created-registry-keys",
-                                          "windows-registry-key"),
-    "delete-registry-key": _ActionMapping("deleted-registry-keys",
-                                          "windows-registry-key"),
-    "open-registry-key": _ActionMapping("opened-registry-keys",
-                                        "windows-registry-key"),
-    "create-registry-key-value": _ActionMapping("written-registry-key-values",
-                                                "windows-registry-key"),
-    "read-registry-key-value": _ActionMapping("read-registry-keys",
-                                              "windows-registry-key"),
-    "connect-to-url": _ActionMapping("contacted-urls", "url"),
-    "connect-to-ip-address": _ActionMapping("contacted-ips",
-                                            ["ipv4-addr", "ipv6-addr"])
-}
-
-
-# shortcut for these since they all map to the same STIX
-for maec_action_name in ("send-http-connect-request",
-                         "send-http-delete-request", "send-http-get-request",
-                         "send-http-head-request", "send-http-options-request",
-                         "send-http-patch-request", "send-http-post-request",
-                         "send-http-put-request", "send-http-trace-request"):
-    _MAEC_STIX_ACTION_MAP[maec_action_name] = _ActionMapping("http-requests",
-                                                             "network-traffic")
 
 
 # Maps MAEC capabilities and refined capabilities to STIX capabilities.
@@ -116,6 +72,253 @@ _MAEC_STIX_CAPABILITY_MAP = {
 }
 
 
+class SCOMapping(object):
+
+    _SCOGraphNode = collections.namedtuple("SCOGraphNode", "sco outgoing_sros")
+
+    def __init__(self, maec_observable_objects, creation_timestamp):
+        """
+        Initialize the internal structures from a MAEC package's observable
+        objects.
+
+        :param maec_observable_objects: The value of the "observable_objects"
+            property of a MAEC package.  This is a mapping from ID to a
+            STIX 2.0 SCO.
+        :param creation_timestamp: A timestamp to use for versioning properties
+            for any objects which may need to be created while translating
+            SCOs from STIX 2.0 to 2.1.
+        """
+        self.__by_maec_id, self.__by_stix_id, self.__sco_graph = \
+            self.__make_mappings(
+                maec_observable_objects, creation_timestamp
+            )
+
+    def __remove_maec_avclass_extension(self, sco):
+        """
+        Guidance is that the "x-maec-avclass" extension in observables embedded
+        in a MAEC package should always be stripped in the translation to STIX.
+        So this method does that stripping.  This side-effects the given sco.
+
+        :param sco: The SCO to strip (a dict)
+        """
+        if sco["type"] == "file" and "extensions" in sco:
+            extensions = sco["extensions"]
+            if "x-maec-avclass" in extensions:
+                del extensions["x-maec-avclass"]
+            if not extensions:
+                del sco["extensions"]
+
+    def __make_mappings(self, maec_observable_objects, creation_timestamp):
+        """
+        Create the bookkeeping structures for this mapping object.  Three maps
+        are created:  by_maec_id, by_stix_id, sco_graph.
+
+        by_maec_id: maps a MAEC SCO ID to a list of STIX 2.1 SCO IDs.  These
+            are the non-SRO direct 2.0->2.1 translation results.
+
+        by_stix_id: maps a STIX 2.1 ID to the corresponding 2.1 object.
+
+        sco_graph: this conceptually stores an SCO graph, where nodes are
+            STIX 2.1 SCOs and edges are SROs connecting them.  The
+            data structure is a mapping from STIX 2.1 ID to a 2-tuple, where
+            the first element is the node SCO, and the second element is a
+            list of SROs which are the node's outgoing edges.  So it is a kind
+            of adjacency-list representation: IDs of adjacent nodes can be
+            obtained from the SROs via their "target_ref" properties.
+
+        :param maec_observable_objects: The value of the "observable_objects"
+            property of a MAEC package.  This is a mapping from ID to a
+            STIX 2.0 SCO.
+        :param creation_timestamp: A timestamp to use for versioning properties
+            for any objects which may need to be created while translating
+            SCOs from STIX 2.0 to 2.1.
+        """
+
+        # Elevator "steps" (translates from STIX 2.0 to 2.1) SCOs by
+        # side-effecting them, but I don't want to modify the input MAEC
+        # package.  So make copies first.  Also need to make the minimal
+        # structure required for the stepper.  The stepper wasn't written with
+        # this kind of programmatic usage in mind, so it's kind of awkward...
+        observed_data = {
+            "created": creation_timestamp
+        }
+        observed_data["objects"] = objs = {
+            maec_sco_id: copy.deepcopy(maec_sco)
+            for maec_sco_id, maec_sco in maec_observable_objects.items()
+        }
+
+        # Add IDs: required for the elevator's SCO conversion.  While we're
+        # at it, also look for and strip the x-maec-avclass extension.
+        # spec_version is necessary for the stix2 parser to interpret the
+        # stepped SCOs as STIX version 2.1, in the context of a bundle.
+        # The v21 Bundle class doesn't provide any associated STIX version
+        # context, so the SCO's must self-identify their STIX version.
+        for obj in objs.values():
+            self.__remove_maec_avclass_extension(obj)
+            obj["id"] = stix2elevator.ids.generate_sco_id(obj["type"], obj)
+            obj["spec_version"] = "2.1"
+
+        by_maec_id = {}
+        by_stix_id = {}
+        sco_graph = {}
+        for maec_sco_id, maec_sco in objs.items():
+            results = stix2elevator.stix_stepper.step_cyber_observable(
+                maec_sco, observed_data
+            )
+
+            # Update mappings for SCO results; collect SRO results.
+            # The latter will be used to update the "outgoing edge" lists for
+            # the former.
+            sro_results = []
+            for result in results:
+                by_stix_id[result["id"]] = result
+
+                if result["type"] == "relationship":
+                    sro_results.append(result)
+                else:
+                    by_maec_id.setdefault(maec_sco_id, []).append(result["id"])
+                    sco_graph[result["id"]] = SCOMapping._SCOGraphNode(
+                        result, []  # fill in any outgoing edges below
+                    )
+
+            for sro in sro_results:
+                source_ref = sro["source_ref"]
+                source_graph_node = sco_graph.get(source_ref)
+
+                if not source_graph_node:
+                    raise TranslationError(
+                        "SCO conversion produced a '{}' relationship from an "
+                        "unknown object: {}".format(
+                            sro["relationship_type"],
+                            source_ref
+                        )
+                    )
+
+                source_graph_node.outgoing_sros.append(sro)
+
+        return by_maec_id, by_stix_id, sco_graph
+
+    def get_stix_object(self, stix_id):
+        """
+        Look up STIX 2.1 object by its ID.
+
+        :param stix_id: The ID of the object to look up.
+        :return: The object
+        :raise KeyError: If the ID isn't recognized
+        """
+        return self.__by_stix_id[stix_id]
+
+    def get_stix_objects(self, stix_ids):
+        """
+        Look up STIX 2.1 objects by their IDs.
+
+        :param stix_ids: A single or iterable of STIX 2.1 IDs.
+        :return: The list of matching objects.  If a single ID is given,
+            the result will nevertheless be a list (of length 1).
+        :raise KeyError: If any ID isn't recognized
+        """
+        if isinstance(stix_ids, six.text_type):
+            stix_ids = [stix_ids]
+
+        return [
+            self.__by_stix_id[stix_id] for stix_id in stix_ids
+        ]
+
+    def get_stix_object_closure_for_maec_ids(
+        self, maec_ids, tlo_type_filter=None
+    ):
+        """
+        Get STIX 2.1 IDs of objects related to the given STIX 2.0 IDs.
+        "Related" objects are those connected via either SRO or _ref/_refs
+        property.  Two sets of IDs are returned: IDs of "top-level" objects
+        and IDs of all objects.  The distinction is necessary because a
+        *_refs property for example should only contain the directly relevant
+        values.  Other objects should accompany them in the bundle so that there
+        are no dangling references or lost information, but the property should
+        not refer to them directly.
+
+        If tlo_type_filter is given, filter the top-level objects to be only
+        those of the given types.  This allows the caller to ask only for
+        those objects which satisfy STIX spec requirements.  The returned
+        tuple's second value is not directly subject to the filter, but will
+        contain only those objects related to top-level objects which pass the
+        filter.  In that way, the filter indirectly affects the latter set too.
+
+        :param maec_ids: A single or list of STIX 2.0 IDs
+        :param tlo_type_filter: An iterable of strings giving allowed STIX
+            types of the top-level objects.
+        :return: A 2-tuple consisting of (1) set of STIX 2.1 IDs of top-level
+            objects, and (2) set of STIX 2.1 IDs of all objects, including
+            the top-level objects and any others which are related.
+        """
+        if isinstance(maec_ids, six.text_type):
+            maec_ids = [maec_ids]
+
+        tlo_ids = set()
+        visited_stix_ids = set()
+
+        for maec_id in maec_ids:
+
+            if tlo_type_filter:
+                stix_ids = (
+                    stix_id
+                    for stix_id in self.__by_maec_id[maec_id]
+                    if self.__by_stix_id[stix_id]["type"]
+                    in tlo_type_filter
+                )
+            else:
+                stix_ids = self.__by_maec_id[maec_id]
+
+            for stix_id in stix_ids:
+                tlo_ids.add(stix_id)
+
+                self.get_stix_object_closure_for_stix_ids(
+                    stix_id, visited_stix_ids
+                )
+
+        return tlo_ids, visited_stix_ids
+
+    def get_stix_object_closure_for_stix_ids(
+        self, stix_ids, visited_stix_ids=None
+    ):
+        """
+        Get the STIX 2.1 IDs of all objects "related" to objects with the given
+        IDs.  This includes relationships via SROs and *_ref/refs properties.
+
+        :param stix_ids: The STIX 2.1 IDs of objects to start the search from
+        :param visited_stix_ids: A set of IDs already visited, to prevent
+            redundant searches, or None to start a new set.  This is updated
+            as the search proceeds, and doubles as the returned closure set.
+        :return: The visited_stix_ids parameter
+        """
+        if isinstance(stix_ids, six.text_type):
+            stix_ids = [stix_ids]
+
+        if visited_stix_ids is None:
+            visited_stix_ids = set()
+
+        for stix_id in stix_ids:
+            if stix_id not in visited_stix_ids:
+                visited_stix_ids.add(stix_id)
+
+                sco, outgoing_sros = self.__sco_graph[stix_id]
+
+                for prop_name in sco:
+                    if prop_name.endswith("_ref") or \
+                            prop_name.endswith("_refs"):
+                        self.get_stix_object_closure_for_stix_ids(
+                            sco[prop_name], visited_stix_ids
+                        )
+
+                for sro in outgoing_sros:
+                    visited_stix_ids.add(sro["id"])
+                    self.get_stix_object_closure_for_stix_ids(
+                        sro["target_ref"], visited_stix_ids
+                    )
+
+        return visited_stix_ids
+
+
 def _uuid_from_id(id_):
     """Extract the uuid from a MAEC identifier"""
     dd_idx = id_.find("--")
@@ -128,7 +331,39 @@ def _uuid_from_id(id_):
 
 def _get_timestamp():
     """Get a timestamp string for the current time (as UTC)"""
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    ts = datetime.datetime.utcnow()
+
+    # Ensure exactly 3 digits after the decimal point, as required by STIX
+    # for timestamps used for versioning.
+    if ts.microsecond == 0:
+        ts_iso_str = ts.isoformat() + ".000Z"
+    else:
+        ts_iso_str = ts.isoformat()[:-3] + "Z"
+
+    return ts_iso_str
+
+
+def _make_sro(source_id, target_id, relationship_type, timestamp, id_=None):
+    """
+    Make an SRO dict from components.
+
+    :param source_id: The value for the source_ref property
+    :param target_id: The value for the target_ref property
+    :param relationship_type: A relationship type (string)
+    :param timestamp: A timestamp string
+    :param id_: An ID to use for the SRO, or None to generate one from a uuid4.
+    :return: The SRO dict
+    """
+    return {
+        "id": id_ or "relationship--" + six.text_type(uuid.uuid4()),
+        "type": "relationship",
+        "spec_version": "2.1",
+        "relationship_type": relationship_type,
+        "source_ref": source_id,
+        "target_ref": target_id,
+        "created": timestamp,
+        "modified": timestamp
+    }
 
 
 def _name_from_malware_instance(maec_malware_instance, maec_package):
@@ -137,204 +372,322 @@ def _name_from_malware_instance(maec_malware_instance, maec_package):
 
     :param maec_malware_instance: A MAEC malware instance
     :param maec_package: The containing MAEC package
-    :return: A name
+    :return: A name, or None if one could not be determined
     """
+    name = None
+
     if "name" in maec_malware_instance:
-        return maec_malware_instance["name"]["value"]
-
-    # This is only a simple attempt to obtain a name.  The MAEC spec allows
-    # references to any type of observable, although files and urls are
-    # typical.  We won't try to handle every type.
-    object_ref = maec_malware_instance["instance_object_refs"][0]
-    observable = maec_package["observable_objects"][object_ref]
-
-    obs_type = observable["type"]
-    if obs_type == "file":
-        if "name" in observable:
-            name = observable["name"]
-        else:
-            hashes = observable["hashes"]
-
-            # In order of preference...
-            if "MD5" in hashes:
-                name = hashes["MD5"]
-            elif "SHA-256" in hashes:
-                name = hashes["SHA-256"]
-            else:
-                # otherwise, just use whatever's there?
-                k = next(iter(hashes))
-                name = hashes[k]
-
-    elif obs_type == "url":
-        name = observable["value"]
+        name = maec_malware_instance["name"]["value"]
 
     else:
-        raise TranslationError("Unable to compute a STIX malware name from " +
-                               maec_malware_instance["id"])
+        # This is only a simple attempt to obtain a name.  The MAEC spec allows
+        # references to any type of observable, although files and urls are
+        # typical.  We won't try to handle every type.
+        object_ref = maec_malware_instance["instance_object_refs"][0]
+        observable = maec_package["observable_objects"][object_ref]
+
+        obs_type = observable["type"]
+        if obs_type == "file":
+            if "name" in observable:
+                name = observable["name"]
+            else:
+                hashes = observable["hashes"]
+
+                # In order of preference...
+                if "MD5" in hashes:
+                    name = hashes["MD5"]
+                elif "SHA-256" in hashes:
+                    name = hashes["SHA-256"]
+                else:
+                    # otherwise, just use whatever's there?
+                    k = next(iter(hashes))
+                    name = hashes[k]
+
+        elif obs_type == "url":
+            name = observable["value"]
 
     return name
 
 
-def _find_observable_refs(val, refs=None, visited_ids=None):
+def _normalize_for_stix_malware_analysis_product(value):
     """
-    Traverse a single observable and find all its ref/refs property values.
+    Normalize a string according to STIX 2.1 malware-analysis/product
+    requirements.
 
-    :param val: The observable, or some sub-object of it.
-    :param refs: A set shared among the recursive calls, which builds up the
-        set of discovered references.  If None, a new set will be created (and
-        returned).
-    :param visited_ids: Collects id()'s of visited sub-objects, to prevent
-        infinite loops in the case of cyclic structures, and keep from
-        re-traversing shared sub-objects.  If None, a new set is created.
-    :return: The refs parameter is returned, for convenience.  It will contain
-        all discovered references.
+    From STIX 2.1 spec, malware-analysis "product" value "SHOULD be all
+    lowercase with words separated by a dash".  So ensure that format.
+
+    :param value: The value to normalize
+    :return: The normalized value
     """
+    value = re.sub(r"[^a-z0-9-]+", "-", value, flags=re.I)
 
-    if visited_ids is None:
-        visited_ids = set()
+    # coalesce multiple dashes to one
+    value = re.sub(r"--+", "-", value)
 
-    if refs is None:
-        refs = set()
+    # strip leading/trailing dashes, lowercase
+    value = value.strip("-").lower()
 
-    visited_ids.add(id(val))
-
-    if isinstance(val, dict):
-        for k, v in val.items():
-            if k.endswith("_ref"):
-                refs.add(v)
-            elif k.endswith("_refs"):
-                refs.update(v)
-            elif id(v) not in visited_ids:
-                _find_observable_refs(v, refs, visited_ids)
-
-    elif isinstance(val, list):
-        for v in val:
-            if id(v) not in visited_ids:
-                _find_observable_refs(v, refs, visited_ids)
-
-    return refs
+    return value
 
 
-def _find_observable_closures(observable_ids, obs_map, visited_obs=None):
+def _translate_maec_analysis_conclusion(conclusion):
     """
-    Given some observable IDs, figure out what they're connected to, both
-    directly and indirectly.  I.e. find their closures.
+    Translate from MAEC analysis conclusion (analysis-conclusion-ov) to
+    STIX malware-analysis av_result (malware-av-result-ov).
 
-    :param observable_ids: Iterable of the observable ID's of interest
-    :param obs_map: A map of all observables (ID -> observable)
-    :param visited_obs: Set of observable IDs shared among the recursive calls,
-        used for collection, to prevent infinite loops in case there are
-         cycles, and to keep from re-traversing shared substructure.  If None,
-         a new set will be created (and returned).
-    :return: The visited_obs parameter is returned, for convenience.  This
-        will be the closure set.
+    :param conclusion: The MAEC conclusion value
+    :return: The STIX av_result value
     """
-
-    if visited_obs is None:
-        visited_obs = set()
-
-    for obs_id in observable_ids:
-        if obs_id not in visited_obs:
-            visited_obs.add(obs_id)
-            refs = _find_observable_refs(obs_map[obs_id])
-            _find_observable_closures(refs, obs_map, visited_obs)
-
-    return visited_obs
+    # Mapping is simple enough not to need a table; just hardcode the one
+    # change: indeterminate -> unknown
+    return "unknown" if conclusion == "indeterminate" else conclusion
 
 
-def _copy_extract_observables(observable_ids, maec_package):
+def _product_name_from_analysis_metadata(maec_analysis_metadata, sco_mapping):
     """
-    Given some observable IDs from maec_package, return a new dict which
-    contains copies of just those observables, along with any other indirectly
-    referenced observables (so that there are no dangling references).
+    Get a value for the required "product" property of a malware-analysis SDO,
+    from MAEC analysis-metadata.
 
-    Guidance is that the "x-maec-avclass" extension in observables embedded
-    in a MAEC package should always be stripped in the translation to STIX.
-    So this method also does that stripping.
-
-    :param observable_ids: Iterable of IDs of observables to copy
-    :param maec_package: The source of the copy, a MAEC package (observables
-        are taken from its "observable_objects" property).
-    :return: A dict with copies of all necessary observables from maec_package.
+    :param maec_analysis_metadata: Some MAEC analysis metadata
+    :param sco_mapping: The STIX 2.0->2.1 SCO mapping object
+    :return: A product value, or "unknown" if one could not otherwise be found
     """
-    obs_map = maec_package["observable_objects"]
-    extracted_obs = {
-        object_ref: copy.deepcopy(obs_map[object_ref])
-        for object_ref in _find_observable_closures(observable_ids, obs_map)
+    product = "unknown"
+
+    if maec_analysis_metadata:
+        tool_refs = maec_analysis_metadata.get("tool_refs")
+        if tool_refs:
+            # There may be many "tool_refs" values, but we have no
+            # criteria to choose one.  Just pick the first one.  Each must refer
+            # to a "software" SCO.
+            software_sco_ids, _ = \
+                sco_mapping.get_stix_object_closure_for_maec_ids(tool_refs[0])
+
+            # As of this writing, a single STIX 2.0 software SCO (used in MAEC)
+            # translates to a single STIX 2.1 software SCO.
+            first_sco_id = software_sco_ids.pop()
+            software_sco = sco_mapping.get_stix_object(first_sco_id)
+
+            product = software_sco["name"]
+
+    return product
+
+
+def _start_stix_malware_analysis(timestamp, product):
+    """
+    Create a basic starter malware-analysis SDO, with the given timestamp
+    for its versioning properties, and a "product" property value derived from
+    the given product.  The product value will be normalized according to STIX
+    requirements.
+
+    :param timestamp: The timestamp string used for the versioning properties
+    :param product: The product value to normalize and use
+    :return: A malware-analysis SDO dict
+    """
+    return {
+        "type": "malware-analysis",
+        "spec_version": "2.1",
+        "id": "malware-analysis--" + six.text_type(uuid.uuid4()),
+        "created": timestamp,
+        "modified": timestamp,
+        "product": _normalize_for_stix_malware_analysis_product(product)
     }
 
-    for obs in extracted_obs.values():
-        if obs["type"] == "file" and "extensions" in obs:
-            extensions = obs["extensions"]
-            if "x-maec-avclass" in extensions:
-                del extensions["x-maec-avclass"]
-            if not extensions:
-                del obs["extensions"]
 
-    return extracted_obs
-
-
-def _translate_static_features(maec_static_features, maec_package):
+def _start_stix_malware_analysis_from_maec_analysis(
+    timestamp, sco_mapping, maec_analysis=None
+):
     """
-    Translate MAEC static features to STIX static analysis results.
+    Both MAEC and STIX can represent both static and dynamic analyses, and in
+    both specs, both types of analyses are represented with a common type
+    (analysis-metadata in MAEC and the malware-analysis SDO in STIX).  So there
+    is some common metadata for all analyses, in both specs.  This translates
+    some commonalities from MAEC to STIX.
 
-    :param maec_static_features: The MAEC static features
-    :param maec_package: The containing MAEC package
-    :return: A 2-tuple: A STIX static analysis results dict and a set of
-        additional labels to be added to a STIX malware object
+    :param maec_analysis: The MAEC analysis (static or dynamic)
+    :return: A 2-tuple consisting of (1) The beginnings of a new STIX analysis
+        SDO (a dict), and (2) all STIX 2.1 IDs of SCOs which must be included
+        in the eventual bundle the SDO will be included in.
     """
-    stix_results = {}
-    additional_labels = set()
 
-    if "certificates" in maec_static_features:
-        stix_results["certificates"] = _copy_extract_observables(
-            maec_static_features["certificates"], maec_package
-        )
+    all_stix_ids = set()
 
-    if "obfuscation_methods" in maec_static_features:
-        stix_packer_obfuscators = []
-        for obfuscation_method in maec_static_features["obfuscation_methods"]:
-            if obfuscation_method["method"] == "packing":
-                stix_packer_obfuscators.append({
-                    "type": "software",
-                    "name": obfuscation_method["packer_name"],
-                    "version": obfuscation_method["packer_version"]
-                })
-            else:
-                additional_labels.add(obfuscation_method["method"])
+    product = _product_name_from_analysis_metadata(
+        maec_analysis, sco_mapping
+    )
+    stix_malware_analysis = _start_stix_malware_analysis(timestamp, product)
 
-            if "encryption_algorithm" in obfuscation_method:
-                additional_labels.add(
-                    obfuscation_method["encryption_algorithm"]
+    if maec_analysis:
+        if "start_time" in maec_analysis:
+            stix_malware_analysis["analysis_started"] = \
+                maec_analysis["start_time"]
+
+        if "end_time" in maec_analysis:
+            stix_malware_analysis["analysis_ended"] = maec_analysis["end_time"]
+
+        if "tool_refs" in maec_analysis:
+            tlo_ids, stix_ids = \
+                sco_mapping.get_stix_object_closure_for_maec_ids(
+                    maec_analysis["tool_refs"], ["software"]
                 )
 
-        if stix_packer_obfuscators:
-            stix_results["packers"] = {
-                str(n): packer
-                for n, packer in enumerate(stix_packer_obfuscators)
-            }
+            if tlo_ids:
+                stix_malware_analysis["installed_software_refs"] = \
+                    list(tlo_ids)
+                all_stix_ids |= stix_ids
 
-    if "strings" in maec_static_features:
-        stix_results["strings"] = maec_static_features["strings"][:]
+        if "conclusion" in maec_analysis:
+            stix_malware_analysis["av_result"] = \
+                _translate_maec_analysis_conclusion(
+                    maec_analysis["conclusion"]
+                )
 
-    if "file_headers" in maec_static_features:
-        stix_results["file-headers"] = _copy_extract_observables(
-            maec_static_features["file_headers"], maec_package
-        )
+        if "analysis_environment" in maec_analysis:
+            analysis_environment = maec_analysis["analysis_environment"]
 
-    return stix_results, additional_labels
+            if "operating-system" in analysis_environment:
+                tlo_ids, stix_ids = \
+                    sco_mapping.get_stix_object_closure_for_maec_ids(
+                        analysis_environment["operating-system"],
+                        ["software"]
+                    )
+
+                if tlo_ids:
+                    stix_malware_analysis["operating_system_ref"] = \
+                        tlo_ids.pop()
+                    all_stix_ids |= stix_ids
+
+            if "host-vm" in analysis_environment:
+                tlo_ids, stix_ids = \
+                    sco_mapping.get_stix_object_closure_for_maec_ids(
+                        analysis_environment["host-vm"],
+                        ["software"]
+                    )
+
+                if tlo_ids:
+                    stix_malware_analysis["host_vm_ref"] = \
+                        tlo_ids.pop()
+                    all_stix_ids |= stix_ids
+
+            if "installed-software" in analysis_environment:
+                tlo_ids, stix_ids = \
+                    sco_mapping.get_stix_object_closure_for_maec_ids(
+                        analysis_environment["installed-software"],
+                        ["software"]
+                    )
+
+                if tlo_ids:
+                    stix_malware_analysis.setdefault(
+                        "installed_software_refs", []
+                    ).extend(tlo_ids)
+                    all_stix_ids |= stix_ids
+
+    return stix_malware_analysis, all_stix_ids
 
 
-def _translate_dynamic_features(maec_dynamic_features, maec_package):
+def _start_stix_malware_analysis_from_sco_extension(
+    extension, timestamp
+):
     """
-    Translate MAEC dynamic features to STIX dynamic analysis results.  This
-    currently just looks at MAEC action_refs and ignores everything else.
+    Start a malware-analysis SDO from an x-maec-avclass extension on a SCO from
+    a MAEC package.
+
+    :param extension: The extension dict
+    :param timestamp: A timestamp string to use for the new SDO's versioning
+        properties
+    :return: The malware-analysis SDO dict
+    """
+    # Guidance is to use vendor for the "product", not the name.
+    av_vendor = extension.get("av_vendor", "unknown")
+    stix_malware_analysis = _start_stix_malware_analysis(timestamp, av_vendor)
+
+    stix_malware_analysis["analysis_started"] = \
+        stix_malware_analysis["analysis_ended"] = extension["scan_date"]
+
+    # The extension has boolean yes/no detection value, so we can't distinguish
+    # between "malicious" and "suspicious".  Just use "malicious" if detected
+    # and "benign" if not.
+    stix_malware_analysis["av_result"] = "malicious" if \
+        extension["is_detected"] else "benign"
+
+    if "av_version" in extension:
+        stix_malware_analysis["version"] = extension["av_version"]
+
+    if "av_engine_version" in extension:
+        stix_malware_analysis["analysis_engine_version"] = \
+            extension["av_engine_version"]
+
+    if "av_definition_version" in extension:
+        stix_malware_analysis["analysis_definition_version"] = \
+            extension["av_definition_version"]
+
+    return stix_malware_analysis
+
+
+def _translate_static_features(maec_static_features, sco_mapping):
+    """
+    Translate MAEC static features to STIX 2.1 SCOs.
+
+    :param maec_static_features: The MAEC static features
+    :return: A 3-tuple: (1) The STIX 2.1 IDs of SCOs to be directly referenced
+        from a malware-analysis SDO, (2) All IDs of SCOs to be included in the
+        eventual bundle, (3) set of additional malware SDO labels derived from
+        certain aspects of the MAEC static features
+    """
+    additional_labels = set()
+    all_tlo_ids = set()
+    all_stix_ids = set()
+
+    if maec_static_features:
+        obfuscation_methods = maec_static_features.get("obfuscation_methods")
+        certificates = maec_static_features.get("certificates")
+        file_headers = maec_static_features.get("file_headers")
+
+        if obfuscation_methods:
+            for obfuscation_method in obfuscation_methods:
+                if obfuscation_method["method"] != "packing":
+                    additional_labels.add(obfuscation_method["method"])
+
+                if "encryption_algorithm" in obfuscation_method:
+                    additional_labels.add(
+                        obfuscation_method["encryption_algorithm"]
+                    )
+
+        if certificates:
+            tlo_ids, stix_ids = \
+                sco_mapping.get_stix_object_closure_for_maec_ids(
+                    certificates, ["x509-certificate"]
+                )
+            all_tlo_ids |= tlo_ids
+            all_stix_ids |= stix_ids
+
+        if file_headers:
+            tlo_ids, stix_ids = \
+                sco_mapping.get_stix_object_closure_for_maec_ids(
+                    file_headers, ["file"]
+                )
+            all_tlo_ids |= tlo_ids
+            all_stix_ids |= stix_ids
+
+    return all_tlo_ids, all_stix_ids, additional_labels
+
+
+def _translate_dynamic_features(
+    maec_dynamic_features, maec_package, sco_mapping
+):
+    """
+    Translate MAEC dynamic features to STIX 2.1 SCOs.
 
     :param maec_dynamic_features: MAEC dynamic features
     :param maec_package: The containing MAEC package
-    :return: A STIX dynamic analysis results dict
+    :param sco_mapping: The STIX 2.0->2.1 SCO mapping object
+    :return: A 2-tuple: (1) The STIX 2.1 IDs of SCOs to be directly referenced
+        from a malware-analysis SDO, (2) All IDs of SCOs to be included in the
+        eventual bundle
     """
-    stix_results = {}
+    all_tlo_ids = set()
+    all_stix_ids = set()
 
     if "action_refs" in maec_dynamic_features:
         for action_ref in maec_dynamic_features["action_refs"]:
@@ -352,163 +705,145 @@ def _translate_dynamic_features(maec_dynamic_features, maec_package):
                 # type error: reference must be to an action!
                 continue
 
-            # Make sure the action has what we need, and is one we can translate
-            # (The "name" property is required.  Shouldn't need to check that.)
-            if "output_object_refs" not in maec_obj or \
-                    maec_obj["name"] not in _MAEC_STIX_ACTION_MAP:
+            # Make sure the action has what we need.
+            if "output_object_refs" not in maec_obj:
                 continue
 
-            stix_mapping = _MAEC_STIX_ACTION_MAP[maec_obj["name"]]
-
-            # Handle list-of-types by normalizing singles to a list as well.
-            observable_types = stix_mapping.observable_type if isinstance(
-                stix_mapping.observable_type, list
-            ) else [
-                stix_mapping.observable_type
-            ]
-
-            # Don't trust that the observables referenced from the action
-            # satisfy STIX requirements.  Specifically look for observables
-            # of the correct type.
-            correct_type_observables = (
-                obs_id for obs_id in maec_obj["output_object_refs"]
-                if maec_package["observable_objects"][obs_id]["type"]
-                in observable_types
-            )
-
-            observables = _copy_extract_observables(
-                correct_type_observables,
-                maec_package
-            )
-
-            # Yeah, sometimes an action refers only to observables of the
-            # "wrong" type.  Then we have no observables to include in the
-            # STIX.
-            if observables:
-                stix_results.setdefault(stix_mapping.stix_name, {}).update(
-                    observables
+            tlo_ids, stix_ids = \
+                sco_mapping.get_stix_object_closure_for_maec_ids(
+                    maec_obj["output_object_refs"]
                 )
 
-    return stix_results
+            all_tlo_ids |= tlo_ids
+            all_stix_ids |= stix_ids
 
-
-def _start_stix_analysis(maec_analysis, maec_package):
-    """
-    Both MAEC and STIX can represent both static and dynamic analyses, and in
-    both specs, both types of analyses are represented with a common type
-    (analysis-metadata in MAEC and analysis-type in STIX).  So there is some
-    common metadata for all analyses, in both specs.  This translates some
-    commonalities from MAEC to STIX.
-
-    :param maec_analysis: The MAEC analysis (static or dynamic)
-    :param maec_package: The MAEC package containing the analysis
-    :return: The beginnings of a new STIX analysis (a dict)
-    """
-    stix_analysis = {}
-    if "start_time" in maec_analysis:
-        stix_analysis["start_time"] = maec_analysis["start_time"]
-
-    if "end_time" in maec_analysis:
-        stix_analysis["end_time"] = maec_analysis["end_time"]
-
-    if "tool_refs" in maec_analysis:
-        stix_analysis["analysis_tools"] = _copy_extract_observables(
-            maec_analysis["tool_refs"], maec_package
+    if "network_traffic_refs" in maec_dynamic_features:
+        tlo_ids, stix_ids = sco_mapping.get_stix_object_closure_for_maec_ids(
+            maec_dynamic_features["network_traffic_refs"]
         )
 
-    return stix_analysis
+        all_tlo_ids |= tlo_ids
+        all_stix_ids |= stix_ids
+
+    return all_tlo_ids, all_stix_ids
 
 
 def _translate_static_analyses(maec_static_analyses, maec_static_features,
-                               maec_package):
+                               timestamp, sco_mapping):
     """
     Translates MAEC static analyses/features to a STIX static analysis.
 
     :param maec_static_analyses: List of MAEC static analyses
     :param maec_static_features: MAEC static_features dict
-    :param maec_package: The containing MAEC package
-    :return: A 2-tuple: A STIX static analysis and a set of additional
-        labels to be added to a STIX malware object.  If a STIX analysis could
-        not be translated from the MAEC, None is returned for the first
-        component.  If no labels were found, an empty set is returned for the
-        second component.
+    :param timestamp: The timestamp to use for versioning properties of newly
+        created SDOs, etc
+    :param sco_mapping: The STIX 2.0->2.1 SCO mapping object
+    :return: A 3-tuple: (1) A malware-analysis SDO, (2) a set of labels for
+        the malware object (representing the malware being analyzed), (3)
+        set of STIX 2.1 IDs of SCOs to be included in the eventual bundle
     """
-
-    stix_static_results = None
+    all_stix_ids = set()
     additional_labels = set()
+
+    if len(maec_static_analyses) == 1:
+        maec_static_analysis = maec_static_analyses[0]
+    else:
+        maec_static_analysis = None
+
+    stix_static_analysis, stix_ids = \
+        _start_stix_malware_analysis_from_maec_analysis(
+            timestamp, sco_mapping, maec_static_analysis
+        )
+    all_stix_ids |= stix_ids
+
     if maec_static_features:
-        stix_static_results, additional_labels = _translate_static_features(
-            maec_static_features, maec_package
+        tlo_ids, stix_ids, additional_labels = _translate_static_features(
+            maec_static_features, sco_mapping
         )
 
-    # "results" is required in a STIX analysis.  If we couldn't translate the
-    # static features to results, we can't make an analysis.
-    stix_static_analysis = None
-    if stix_static_results:
-        # Guidance is to copy over some analysis metadata if there is exactly
-        # one analysis.  Otherwise, either we have no metadata, or it's
-        # ambiguous which analysis (if any) produced the static features.  So
-        # we don't copy anything.  In all cases, we never produce more than one
-        # STIX analysis.
-        if len(maec_static_analyses) == 1:
-            stix_static_analysis = _start_stix_analysis(maec_static_analyses[0],
-                                                        maec_package)
-        else:
-            stix_static_analysis = {}
+        if tlo_ids:
+            all_stix_ids |= stix_ids
+            stix_static_analysis["analysis_sco_refs"] = list(tlo_ids)
 
-        stix_static_analysis["results"] = stix_static_results
+    # STIX spec says analyses must have at least one of the below two
+    # properties.  If we didn't get either one, gotta toss our analysis out.
+    # (But keep the additional labels.)
+    if all(
+        prop not in stix_static_analysis
+        for prop in ("av_result", "analysis_sco_refs")
+    ):
+        stix_static_analysis = None
+        all_stix_ids.clear()
 
-    return stix_static_analysis, additional_labels
+    return stix_static_analysis, additional_labels, all_stix_ids
 
 
 def _translate_dynamic_analyses(maec_dynamic_analyses, maec_dynamic_features,
-                                maec_package):
+                                maec_package, timestamp, sco_mapping):
     """
     Translates MAEC dynamic analyses/features to a STIX dynamic analysis.
 
     :param maec_dynamic_analyses: List of MAEC dynamic analyses
     :param maec_dynamic_features: MAEC dynamic_features dict
     :param maec_package: The containing MAEC package
-    :return: A STIX dynamic analysis.  If a STIX analysis could not translated
-        from the MAEC, None is returned.
+    :param timestamp: The timestamp to use for created/modified properties of
+        newly created malware-analysis SDOs, SROs, etc.
+    :param sco_mapping: The STIX 2.0->2.1 SCO mapping object
+    :return: A 2-tuple: (1) A malware-analysis SDO, (2) set of STIX 2.1 IDs of
+        SCOs to be included in the eventual bundle
     """
+    all_stix_ids = set()
 
-    stix_dynamic_results = None
+    if len(maec_dynamic_analyses) == 1:
+        maec_dynamic_analysis = maec_dynamic_analyses[0]
+    else:
+        maec_dynamic_analysis = None
+
+    stix_dynamic_analysis, stix_ids = \
+        _start_stix_malware_analysis_from_maec_analysis(
+            timestamp, sco_mapping, maec_dynamic_analysis
+        )
+    all_stix_ids |= stix_ids
+
     if maec_dynamic_features:
-        stix_dynamic_results = _translate_dynamic_features(
-            maec_dynamic_features, maec_package
+        tlo_ids, stix_ids = _translate_dynamic_features(
+            maec_dynamic_features, maec_package, sco_mapping
         )
 
-    # similar issues for dynamic results as for static results
-    stix_dynamic_analysis = None
-    if stix_dynamic_results:
-        if len(maec_dynamic_analyses) == 1:
-            maec_dynamic_analysis = maec_dynamic_analyses[0]
-            stix_dynamic_analysis = _start_stix_analysis(maec_dynamic_analysis,
-                                                         maec_package)
+        if tlo_ids:
+            all_stix_ids |= stix_ids
+            stix_dynamic_analysis["analysis_sco_refs"] = list(tlo_ids)
 
-            if "analysis_environment" in maec_dynamic_analysis:
-                stix_dynamic_analysis["analysis_environment"] = \
-                    copy.deepcopy(maec_dynamic_analysis["analysis_environment"])
-        else:
-            stix_dynamic_analysis = {}
+    # STIX spec says analyses must have at least one of the below two
+    # properties.  If we didn't get either one, gotta toss our analysis out.
+    if all(
+        prop not in stix_dynamic_analysis
+        for prop in ("av_result", "analysis_sco_refs")
+    ):
+        stix_dynamic_analysis = None
+        all_stix_ids.clear()
 
-        stix_dynamic_analysis["results"] = stix_dynamic_results
-
-    return stix_dynamic_analysis
+    return stix_dynamic_analysis, all_stix_ids
 
 
-def _translate_analyses(maec_malware_instance, maec_package):
+def _translate_analyses(
+    maec_malware_instance, maec_package, timestamp, sco_mapping
+):
     """
     Translate analyses and features from the given MAEC malware instance to
     STIX analyses.
 
     :param maec_malware_instance: A MAEC malware instance
     :param maec_package: The containing MAEC package
-    :return: A 3-tuple: a STIX static analysis, STIX dynamic analysis, and a
-        set of additional labels to be appended to a STIX malware object.
-        (Some MAEC malware features just result in some extra labels.)
+    :param timestamp: The timestamp to use for created/modified properties of
+        newly created STIX objects
+    :param sco_mapping: The STIX 2.0->2.1 SCO mapping object
+    :return: A 4-tuple: (1) a STIX static analysis, (2) STIX dynamic analysis,
+        (3) a set of additional labels to be appended to a STIX malware object,
+        (4) set of STIX 2.1 IDs of SCOs to be included in the eventual bundle
     """
+    all_stix_ids = set()
+
     maec_static_analyses = []
     maec_dynamic_analyses = []
     maec_static_features = None
@@ -527,27 +862,38 @@ def _translate_analyses(maec_malware_instance, maec_package):
     if "dynamic_features" in maec_malware_instance:
         maec_dynamic_features = maec_malware_instance["dynamic_features"]
 
-    stix_static_analysis, additional_labels = _translate_static_analyses(
-        maec_static_analyses, maec_static_features, maec_package
+    stix_static_analysis, additional_labels, stix_ids = \
+        _translate_static_analyses(
+            maec_static_analyses, maec_static_features, timestamp, sco_mapping
+        )
+
+    all_stix_ids |= stix_ids
+
+    stix_dynamic_analysis, stix_ids = _translate_dynamic_analyses(
+        maec_dynamic_analyses, maec_dynamic_features, maec_package, timestamp,
+        sco_mapping
     )
 
-    stix_dynamic_analysis = _translate_dynamic_analyses(
-        maec_dynamic_analyses, maec_dynamic_features, maec_package
-    )
+    all_stix_ids |= stix_ids
 
-    return stix_static_analysis, stix_dynamic_analysis, additional_labels
+    return stix_static_analysis, stix_dynamic_analysis, additional_labels, \
+        all_stix_ids
 
 
-def _translate_observable_extensions(maec_malware_instance, maec_package):
+def _translate_observable_extensions(
+    maec_malware_instance, maec_package, timestamp
+):
     """
     Translate x-maec-avclass extensions of cyber observables referenced by
-    the given MAEC malware instance, to STIX malware av_results.
+    the given MAEC malware instance, to STIX malware-analysis SDOs.
 
     :param maec_malware_instance: A MAEC malware instance
     :param maec_package: The containing MAEC package
-    :return: An av_results value, which is a list of dicts (see the STIX
-        "av-results-type" type).
+    :param timestamp: The timestamp to use for versioning properties of
+        newly created STIX objects
+    :return: A list of malware-analysis SDO dicts
     """
+    stix_analyses = []
 
     maec_av_classification_extensions = itertools.chain.from_iterable(
         maec_package["observable_objects"][obj_id]
@@ -559,33 +905,23 @@ def _translate_observable_extensions(maec_malware_instance, maec_package):
            maec_package["observable_objects"][obj_id]["extensions"]
     )
 
-    results = []
     for extension in maec_av_classification_extensions:
 
-        # It's legal in MAEC to have a positive detection but no
-        # classification name.  But that situation is unrepresentable in
-        # STIX.  Guidance is to skip the extension; this should be rare.
-        if extension["is_detected"] and "classification_name" not in extension:
-            continue
+        stix_analysis = _start_stix_malware_analysis_from_sco_extension(
+            extension, timestamp
+        )
 
-        result = {
-            "scanned": extension["scan_date"]
-        }
+        # I guess nothing else to add to the SDO.  No analysis_sco_refs
+        # here: the SCO extension doesn't identify anything the analysis
+        # discovered, other than a general benign/malicious/etc
+        # classification (and maybe a name).  It seems to me
+        # analysis_sco_refs is not intended to include the thing being
+        # analyzed.  That is represented via an SRO relationship to a
+        # malware SDO.
 
-        if "av_vendor" in extension:
-            result["product"] = extension["av_vendor"]
-        if "av_engine_version" in extension:
-            result["engine_version"] = extension["av_engine_version"]
-        if "av_definition_version" in extension:
-            result["definition_version"] = extension["av_definition_version"]
-        if "submission_date" in extension:
-            result["submitted"] = extension["submission_date"]
-        if extension["is_detected"]:
-            result["result"] = extension["classification_name"]
+        stix_analyses.append(stix_analysis)
 
-        results.append(result)
-
-    return results
+    return stix_analyses
 
 
 def _translate_capabilities(maec_capabilities, stix_capabilities=None):
@@ -614,40 +950,6 @@ def _translate_capabilities(maec_capabilities, stix_capabilities=None):
     return stix_capabilities
 
 
-def _translate_labels(maec_labels):
-    """
-    Translate MAEC labels to STIX malware labels.
-
-    :param maec_labels: An iterable of MAEC labels
-    :return: A list of STIX labels
-    """
-
-    # The labels are mostly the same; just one is different.  So we don't
-    # need a full-fledged mapping at this point.
-    return [
-        "resource_exploitation" if maec_label == "resource_exploiter"
-        else maec_label
-        for maec_label in maec_labels
-    ]
-
-
-def _translate_aliases(maec_aliases):
-    """
-    Translate MAEC aliases to STIX external references.
-
-    :param maec_aliases: An iterable of MAEC aliases
-    :return: A list of STIX external references
-    """
-    return [
-        {
-            "source_name": "n/a",
-            "description": "alias",
-            "external_id": alias["value"]
-        }
-        for alias in maec_aliases
-    ]
-
-
 def _translate_first_last_seen(maec_field_data, stix_malware):
     """
     Translate from MAEC field data to first/last seen properties on the
@@ -662,39 +964,48 @@ def _translate_first_last_seen(maec_field_data, stix_malware):
         stix_malware["last_seen"] = maec_field_data["last_seen"]
 
 
-def _translate_malware_instance(maec_malware_instance, maec_package, timestamp):
+def _translate_malware_instance(
+    maec_malware_instance, maec_package, timestamp, sco_mapping
+):
     """
     Translate a MAEC malware instance to a STIX malware SDO.
 
     :param maec_malware_instance: The MAEC malware instance
     :param maec_package: The containing MAEC package
-    :param timestamp: The timestamp to use for the SDO (created/modified)
-    :return: The STIX malware SDO
+    :param timestamp: The timestamp to use for versioning properties of
+        newly created STIX objects
+    :param sco_mapping: The STIX 2.0->2.1 SCO mapping object
+    :return: A 5-tuple: (1) a STIX 2.1 malware SDO dict, (2) a STIX
+        malware-analysis SDO dict for a static analysis of the malware, or None,
+        (3) same as (2) for a dynamic analysis, (4) a list of malware-analysis
+        SDOs for all the SCO extension based av scan analyses, (5) set of STIX
+        2.1 IDs of SCOs to be included in the eventual bundle
     """
+
     stix_malware = {
         "type": "malware",
         "spec_version": "2.1",
         "id": "malware--" + _uuid_from_id(maec_malware_instance["id"]),
         "created": timestamp,
         "modified": timestamp,
-        "is_family": False,
-        "name": _name_from_malware_instance(maec_malware_instance,
-                                            maec_package),
-        "samples": _copy_extract_observables(
-            maec_malware_instance["instance_object_refs"], maec_package
-        )
+        "is_family": False
     }
 
-    # Optional properties
-    if "labels" in maec_malware_instance:
-        stix_malware["labels"] = _translate_labels(
-            maec_malware_instance["labels"]
-        )
+    all_stix_ids = set()
 
+    name = _name_from_malware_instance(maec_malware_instance, maec_package)
+    if name:
+        stix_malware["name"] = name
     if "aliases" in maec_malware_instance:
-        stix_malware["external_references"] = _translate_aliases(
-            maec_malware_instance["aliases"]
-        )
+        stix_malware["aliases"] = [
+            alias["value"] for alias in maec_malware_instance["aliases"]
+        ]
+
+    if "labels" in maec_malware_instance:
+        maec_labels = maec_malware_instance["labels"][:]
+    else:
+        maec_labels = ["unlabeled-malware"]
+    stix_malware["malware_types"] = maec_labels
 
     if "description" in maec_malware_instance:
         stix_malware["description"] = maec_malware_instance["description"]
@@ -707,19 +1018,18 @@ def _translate_malware_instance(maec_malware_instance, maec_package, timestamp):
         stix_malware["architecture_execution_envs"] = \
             maec_malware_instance["architecture_execution_envs"][:]
 
-    stix_static_analysis, stix_dynamic_analysis, additional_labels = \
-        _translate_analyses(maec_malware_instance, maec_package)
-    if stix_static_analysis:
-        stix_malware["static_analysis_results"] = [stix_static_analysis]
-    if stix_dynamic_analysis:
-        stix_malware["dynamic_analysis_results"] = [stix_dynamic_analysis]
-    if additional_labels:
-        stix_malware.setdefault("labels", []).extend(additional_labels)
+    stix_static_analysis, stix_dynamic_analysis, additional_labels, stix_ids = \
+        _translate_analyses(
+            maec_malware_instance, maec_package, timestamp, sco_mapping
+        )
+    all_stix_ids |= stix_ids
 
-    av_results = _translate_observable_extensions(maec_malware_instance,
-                                                  maec_package)
-    if av_results:
-        stix_malware["av_results"] = av_results
+    if additional_labels:
+        stix_malware["labels"] = additional_labels
+
+    stix_avscan_analyses = _translate_observable_extensions(
+        maec_malware_instance, maec_package, timestamp
+    )
 
     if "capabilities" in maec_malware_instance:
         stix_capabilities = _translate_capabilities(
@@ -729,23 +1039,28 @@ def _translate_malware_instance(maec_malware_instance, maec_package, timestamp):
         if stix_capabilities:
             stix_malware["capabilities"] = list(stix_capabilities)
 
-    if "labels" not in stix_malware:
-        # Made-up label, to satisfy STIX requirement that there is always at
-        # least one label.  Do this at the end, to try to ensure that there
-        # couldn't subsequently be more labels added.  I think if
-        # "unlabeled-malware" is a label, it should be the only label.
-        stix_malware["labels"] = ["unlabeled-malware"]
+    tlo_ids, stix_ids = sco_mapping.get_stix_object_closure_for_maec_ids(
+        maec_malware_instance["instance_object_refs"],
+        ["file", "artifact"]
+    )
+    if tlo_ids:
+        stix_malware["sample_refs"] = list(tlo_ids)
+        all_stix_ids |= stix_ids
 
-    return stix_malware
+    return stix_malware, stix_static_analysis, stix_dynamic_analysis, \
+        stix_avscan_analyses, all_stix_ids
 
 
-def _translate_malware_family(maec_malware_family, timestamp):
+def _translate_malware_family(maec_malware_family, timestamp, sco_mapping):
     """
     Translate a MAEC malware family to a STIX malware SDO.
 
     :param maec_malware_family: A MAEC malware family
-    :param timestamp: The timestamp to use for the SDO (created/modified)
-    :return: The STIX malware SDO
+    :param timestamp: The timestamp to use for versioning properties of
+        newly created STIX objects
+    :param sco_mapping: The STIX 2.0->2.1 SCO mapping object
+    :return: A 2-tuple: (1) The STIX malware SDO, and (2) set of STIX 2.1 IDs
+        of SCOs to be included in the eventual bundle
     """
     stix_malware = {
         "type": "malware",
@@ -757,19 +1072,27 @@ def _translate_malware_family(maec_malware_family, timestamp):
         "name": maec_malware_family["name"]
     }
 
+    all_stix_ids = set()
+
     if "description" in maec_malware_family:
-        stix_malware = maec_malware_family["description"]
+        stix_malware["description"] = maec_malware_family["description"]
 
     if "aliases" in maec_malware_family:
-        stix_malware["external_references"] = _translate_aliases(
-            maec_malware_family["aliases"]
-        )
+        stix_malware["aliases"] = [
+            alias["value"] for alias in maec_malware_family["aliases"]
+        ]
+
+    if "labels" in maec_malware_family:
+        maec_labels = maec_malware_family["labels"][:]
+    else:
+        maec_labels = ["unlabeled-malware"]
+    stix_malware["malware_types"] = maec_labels
 
     if "references" in maec_malware_family:
-        stix_malware.setdefault("external_references", []).extend(
+        stix_malware["external_references"] = [
             copy.deepcopy(maec_ref)
             for maec_ref in maec_malware_family["references"]
-        )
+        ]
 
     if "field_data" in maec_malware_family:
         _translate_first_last_seen(maec_malware_family["field_data"],
@@ -783,14 +1106,17 @@ def _translate_malware_family(maec_malware_family, timestamp):
         if stix_capabilities:
             stix_malware["capabilities"] = list(stix_capabilities)
 
-    if "common_strings" in maec_malware_family:
-        stix_malware["static_analysis_results"] = {
-            "results": {
-                "strings": maec_malware_family["common_strings"][:]
-            }
-        }
+    if "common_code_refs" in maec_malware_family:
+        tlo_ids, stix_ids = sco_mapping.get_stix_object_closure_for_maec_ids(
+            maec_malware_family["common_code_refs"],
+            ["file", "artifact"]
+        )
 
-    return stix_malware
+        if tlo_ids:
+            stix_malware["sample_refs"] = list(tlo_ids)
+            all_stix_ids |= stix_ids
+
+    return stix_malware, all_stix_ids
 
 
 def _translate_relationships(maec_package, timestamp):
@@ -823,38 +1149,41 @@ def _translate_relationships(maec_package, timestamp):
         if dst_maec_obj["type"] not in ("malware-instance", "malware-family"):
             continue
 
-        stix_relationship = {
-            "type": "relationship",
-            "spec_version": "2.1",
-            "id": "relationship--" + _uuid_from_id(maec_relationship["id"]),
-            "source_ref": "malware--" + _uuid_from_id(
-                maec_relationship["source_ref"]
-            ),
-            "target_ref": "malware--" + _uuid_from_id(
-                maec_relationship["target_ref"]
-            )
-        }
-
-        if "timestamp" in maec_relationship:
-            ts = maec_relationship["timestamp"]
-        else:
-            ts = timestamp
-        stix_relationship["created"] = stix_relationship["modified"] = ts
+        stix_source_ref = "malware--" + _uuid_from_id(
+            maec_relationship["source_ref"]
+        )
+        stix_target_ref = "malware--" + _uuid_from_id(
+            maec_relationship["target_ref"]
+        )
+        stix_ts = maec_relationship.get("timestamp", timestamp)
+        stix_rel_id = "relationship--" + _uuid_from_id(maec_relationship["id"])
 
         # Relationship type mapping is simple enough that a simple if-then
         # seems good enough; don't need a formal mapping dict yet.
         maec_rel_type = maec_relationship["relationship_type"]
         if maec_rel_type in ("variant-of", "derived-from", "related-to"):
-            stix_relationship["relationship_type"] = maec_rel_type
+            stix_rel_type = maec_rel_type
 
         elif maec_rel_type == "dropped-by":
             # Reverse the directionality of the relationship for this type
-            stix_relationship["source_ref"], stix_relationship["target_ref"] =\
-                stix_relationship["target_ref"], stix_relationship["source_ref"]
-            stix_relationship["relationship_type"] = "drops"
+            stix_source_ref, stix_target_ref = stix_target_ref, stix_source_ref
+            stix_rel_type = "drops"
+
+        elif maec_rel_type == "downloaded-by":
+            # Reverse the directionality of the relationship for this type
+            stix_source_ref, stix_target_ref = stix_target_ref, stix_source_ref
+            stix_rel_type = "downloads"
 
         else:
-            stix_relationship["relationship_type"] = "related-to"
+            stix_rel_type = "related-to"
+
+        stix_relationship = _make_sro(
+            stix_source_ref,
+            stix_target_ref,
+            stix_rel_type,
+            stix_ts,
+            stix_rel_id
+        )
 
         stix_relationships.append(stix_relationship)
 
@@ -883,7 +1212,7 @@ def translate_package(maec_package):
         "type": "note",
         "spec_version": "2.1",
         "id": "note--" + package_uuid,
-        "description": "translated from MAEC 5.0",
+        "content": "translated from MAEC 5.0",
         "created": current_timestamp,
         "modified": current_timestamp
     }
@@ -893,33 +1222,75 @@ def translate_package(maec_package):
         "id": "bundle--" + package_uuid,
         "objects": [stix_note]
     }
+    stix_objects = stix_bundle["objects"] = [stix_note]
 
-    stix_obj_refs = []
+    maec_observable_objects = maec_package.get("observable_objects", {})
+    sco_mapping = SCOMapping(maec_observable_objects, current_timestamp)
+    all_sco_ids = set()
+
     for maec_obj in maec_package["maec_objects"]:
         obj_type = maec_obj["type"]
 
-        stix_obj = None
         if obj_type == "malware-instance":
-            stix_obj = _translate_malware_instance(
-                maec_obj, maec_package, current_timestamp
-            )
+            stix_obj, static_analysis, dynamic_analysis, avscan_analyses, \
+                sco_ids = _translate_malware_instance(
+                    maec_obj, maec_package, current_timestamp, sco_mapping
+                )
+
+            stix_objects.append(stix_obj)
+            all_sco_ids |= sco_ids
+
+            if static_analysis:
+                stix_objects.append(static_analysis)
+                stix_objects.append(
+                    _make_sro(
+                        static_analysis["id"], stix_obj["id"],
+                        "static-analysis-of", current_timestamp
+                    )
+                )
+
+            if dynamic_analysis:
+                stix_objects.append(dynamic_analysis)
+                stix_objects.append(
+                    _make_sro(
+                        dynamic_analysis["id"], stix_obj["id"],
+                        "dymamic-analysis-of", current_timestamp
+                    )
+                )
+
+            if avscan_analyses:
+                stix_objects.extend(avscan_analyses)
+                stix_objects.extend(
+                    _make_sro(
+                        analysis["id"], stix_obj["id"], "av-analysis-of",
+                        current_timestamp
+                    )
+                    for analysis in avscan_analyses
+                )
+
         elif obj_type == "malware-family":
-            stix_obj = _translate_malware_family(maec_obj, current_timestamp)
+            stix_obj, sco_ids = _translate_malware_family(
+                maec_obj, current_timestamp, sco_mapping
+            )
+
+            stix_objects.append(stix_obj)
+            all_sco_ids |= sco_ids
+
         # Other top-level MAEC objects ignored for now
 
-        if stix_obj:
-            stix_bundle["objects"].append(stix_obj)
-            stix_obj_refs.append(stix_obj["id"])
+    stix_objects.extend(sco_mapping.get_stix_objects(all_sco_ids))
 
     if "relationships" in maec_package:
         stix_relationships = _translate_relationships(maec_package,
                                                       current_timestamp)
 
         if stix_relationships:
-            stix_bundle["objects"].extend(stix_relationships)
-            stix_obj_refs.extend(rel["id"] for rel in stix_relationships)
+            stix_objects.extend(stix_relationships)
 
-    stix_note["object_refs"] = stix_obj_refs
+    stix_note["object_refs"] = [
+        obj["id"] for obj in stix_objects
+        if obj is not stix_note  # except the note itself!
+    ]
 
     return stix_bundle
 

@@ -1004,7 +1004,7 @@ def _translate_malware_instance(
     if "labels" in maec_malware_instance:
         maec_labels = maec_malware_instance["labels"][:]
     else:
-        maec_labels = ["unlabeled-malware"]
+        maec_labels = ["unknown"]
     stix_malware["malware_types"] = maec_labels
 
     if "description" in maec_malware_instance:
@@ -1085,7 +1085,7 @@ def _translate_malware_family(maec_malware_family, timestamp, sco_mapping):
     if "labels" in maec_malware_family:
         maec_labels = maec_malware_family["labels"][:]
     else:
-        maec_labels = ["unlabeled-malware"]
+        maec_labels = ["unknown"]
     stix_malware["malware_types"] = maec_labels
 
     if "references" in maec_malware_family:

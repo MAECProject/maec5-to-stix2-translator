@@ -1254,7 +1254,7 @@ def translate_package(maec_package):
                 stix_objects.append(
                     _make_sro(
                         dynamic_analysis["id"], stix_obj["id"],
-                        "dymamic-analysis-of", current_timestamp
+                        "dynamic-analysis-of", current_timestamp
                     )
                 )
 

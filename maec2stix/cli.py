@@ -6,8 +6,6 @@ import sys
 import maec2stix.translator
 
 try:
-    # Lets us choose whether to add the "-p" option, depending on whether
-    # stix2 is installed.
     import stix2
 except ImportError:
     stix2 = None
@@ -39,14 +37,14 @@ def main():
                         default="utf8",
                         metavar="ENCODING")
 
-    if stix2:
-        parser.add_argument("-p",
-                            help="""
-                            Process the translated STIX bundle using the stix2
-                            library.  This can catch additional translation or
-                            data problems.
-                            """,
-                            action="store_true")
+    parser.add_argument("-n",
+                        help="""
+                        Don't parse the translated STIX bundle using the stix2
+                        library.  Only applicable when that library is
+                        installed.  Otherwise, the option is ignored.
+                        """,
+                        action="store_true"
+                        )
 
     args = parser.parse_args()
 
@@ -74,7 +72,7 @@ def main():
         else:
             out = sys.stdout
 
-        if stix2 and args.p:
+        if stix2 and not args.n:
             stix_bundle_object = \
                 maec2stix.translator.translate_package_to_object(maec_package)
             out.write(stix_bundle_object.serialize(pretty=True))

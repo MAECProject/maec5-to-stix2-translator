@@ -123,6 +123,7 @@ The following table provides details on the object/property mappings between MAE
 |`static-features`|certificates + file_headers|analysis_sco_refs|
 |`dynamic-features`|action_refs.output_object_refs + network_traffic_refs|analysis_sco_refs|
 |`x-maec-avclass`|av_vendor or "unknown"|product|
+|`x-maec-avclass`|av_version|version|
 |`x-maec-avclass`|av_engine_version|analysis_engine_version|
 |`x-maec-avclass`|av_definition_version|analysis_definition_version|
 |`x-maec-avclass`|scan_date|analysis_started, analysis_ended|

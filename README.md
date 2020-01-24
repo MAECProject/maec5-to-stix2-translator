@@ -162,6 +162,16 @@ Static, dynamic, and x-maec-avclass analysis metadata/features produce distinct 
 |virus|virus|
 |worm|worm|
 
+##### MAEC analysis-conclusion-ov --> STIX malware-av-result-ov
+
+|MAEC Vocabulary Value|STIX Vocabulary Value|
+|---------------------|---------------------|
+|benign|benign|
+|malicious|malicious|
+|suspicious|suspicious|
+|indeterminate|unknown|
+
+
 #### Relationship Mappings
 
 |MAEC Relationship|STIX Relationship|

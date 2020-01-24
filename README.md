@@ -13,8 +13,7 @@ More specifically, version 1.0 translates the following:
 
 This library may be used in one of two ways: programmatically, or as a
 commandline tool.  Some additional functionality is available if the
-python-stix2 library is installed, and it supports STIX 2.1.  As of this
-writing, no released version of python-stix2 supports STIX 2.1.
+python-stix2 library is installed, and it supports STIX 2.1.
 
 Note that this library isn't designed to validate MAEC content.  It mostly
 assumes the content is correct.  If it isn't, results are unpredictable.

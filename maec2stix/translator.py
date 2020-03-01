@@ -538,7 +538,7 @@ def _start_stix_malware_analysis_from_maec_analysis(
                 all_stix_ids |= stix_ids
 
         if "conclusion" in maec_analysis:
-            stix_malware_analysis["av_result"] = \
+            stix_malware_analysis["result"] = \
                 _translate_maec_analysis_conclusion(
                     maec_analysis["conclusion"]
                 )
@@ -608,8 +608,11 @@ def _start_stix_malware_analysis_from_sco_extension(
     # The extension has boolean yes/no detection value, so we can't distinguish
     # between "malicious" and "suspicious".  Just use "malicious" if detected
     # and "benign" if not.
-    stix_malware_analysis["av_result"] = "malicious" if \
+    stix_malware_analysis["result"] = "malicious" if \
         extension["is_detected"] else "benign"
+
+    if "classification_name" in extension:
+        stix_malware_analysis["result_name"] = extension["classification_name"]
 
     if "av_version" in extension:
         stix_malware_analysis["version"] = extension["av_version"]

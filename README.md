@@ -117,7 +117,7 @@ The following table provides details on the object/property mappings between MAE
 |`analysis-metadata`|start_time|analysis_started|
 |`analysis-metadata`|end_time|analysis_ended|
 |`analysis-metadata`|tool_refs + analysis_environment.installed-software|installed_software_refs|
-|`analysis-metadata`|conclusion|av_result|
+|`analysis-metadata`|conclusion|result|
 |`analysis-metadata`|analysis_environment.operating-system|operating_system_ref|
 |`analysis-metadata`|analysis_environment.host-vm|host_vm_ref|
 |`static-features`|certificates + file_headers|analysis_sco_refs|
@@ -127,7 +127,7 @@ The following table provides details on the object/property mappings between MAE
 |`x-maec-avclass`|av_engine_version|analysis_engine_version|
 |`x-maec-avclass`|av_definition_version|analysis_definition_version|
 |`x-maec-avclass`|scan_date|analysis_started, analysis_ended|
-|`x-maec-avclass`|is_detected|av_result|
+|`x-maec-avclass`|is_detected|result|
 
 Static, dynamic, and x-maec-avclass analysis metadata/features produce distinct STIX Malware Analysis SDOs, and are related to Malware SDOs in the following ways:
 

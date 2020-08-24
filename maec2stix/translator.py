@@ -434,10 +434,10 @@ def _normalize_for_stix_malware_analysis_product(value):
 def _translate_maec_analysis_conclusion(conclusion):
     """
     Translate from MAEC analysis conclusion (analysis-conclusion-ov) to
-    STIX malware-analysis av_result (malware-av-result-ov).
+    STIX malware-analysis result (malware-av-result-ov).
 
     :param conclusion: The MAEC conclusion value
-    :return: The STIX av_result value
+    :return: The STIX result value
     """
     # Mapping is simple enough not to need a table; just hardcode the one
     # change: indeterminate -> unknown
@@ -538,7 +538,7 @@ def _start_stix_malware_analysis_from_maec_analysis(
                 all_stix_ids |= stix_ids
 
         if "conclusion" in maec_analysis:
-            stix_malware_analysis["av_result"] = \
+            stix_malware_analysis["result"] = \
                 _translate_maec_analysis_conclusion(
                     maec_analysis["conclusion"]
                 )
@@ -608,7 +608,7 @@ def _start_stix_malware_analysis_from_sco_extension(
     # The extension has boolean yes/no detection value, so we can't distinguish
     # between "malicious" and "suspicious".  Just use "malicious" if detected
     # and "benign" if not.
-    stix_malware_analysis["av_result"] = "malicious" if \
+    stix_malware_analysis["result"] = "malicious" if \
         extension["is_detected"] else "benign"
 
     if "av_version" in extension:
@@ -770,7 +770,7 @@ def _translate_static_analyses(maec_static_analyses, maec_static_features,
     # (But keep the additional labels.)
     if all(
         prop not in stix_static_analysis
-        for prop in ("av_result", "analysis_sco_refs")
+        for prop in ("result", "analysis_sco_refs")
     ):
         stix_static_analysis = None
         all_stix_ids.clear()
@@ -818,7 +818,7 @@ def _translate_dynamic_analyses(maec_dynamic_analyses, maec_dynamic_features,
     # properties.  If we didn't get either one, gotta toss our analysis out.
     if all(
         prop not in stix_dynamic_analysis
-        for prop in ("av_result", "analysis_sco_refs")
+        for prop in ("result", "analysis_sco_refs")
     ):
         stix_dynamic_analysis = None
         all_stix_ids.clear()

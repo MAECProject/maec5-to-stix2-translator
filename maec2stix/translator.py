@@ -1219,8 +1219,7 @@ def translate_package(maec_package):
 
     stix_bundle = {
         "type": "bundle",
-        "id": "bundle--" + package_uuid,
-        "objects": [stix_note]
+        "id": "bundle--" + package_uuid
     }
     stix_objects = stix_bundle["objects"] = [stix_note]
 
@@ -1262,7 +1261,7 @@ def translate_package(maec_package):
                 stix_objects.extend(avscan_analyses)
                 stix_objects.extend(
                     _make_sro(
-                        analysis["id"], stix_obj["id"], "av-analysis-of",
+                        analysis["id"], stix_obj["id"], "analysis-of",
                         current_timestamp
                     )
                     for analysis in avscan_analyses

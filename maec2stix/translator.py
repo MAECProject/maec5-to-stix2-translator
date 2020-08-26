@@ -611,6 +611,9 @@ def _start_stix_malware_analysis_from_sco_extension(
     stix_malware_analysis["result"] = "malicious" if \
         extension["is_detected"] else "benign"
 
+    if "classification_name" in extension:
+        stix_malware_analysis["result_name"] = extension["classification_name"]
+
     if "av_version" in extension:
         stix_malware_analysis["version"] = extension["av_version"]
 
